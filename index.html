@@ -53,6 +53,7 @@ th,td{padding:8px 6px;border-bottom:1px solid var(--border);text-align:left;vert
 th{font-size:13px;color:var(--muted);font-weight:600;cursor:pointer;white-space:nowrap;user-select:none}
 td.amount,th.amount{text-align:right;white-space:nowrap}
 td.lib{min-width:240px}
+td.opdate{white-space:nowrap;color:var(--muted)}
 .tag{display:inline-block;font-size:12px;background:var(--surface2);border-radius:6px;padding:1px 6px;margin-top:3px;color:var(--muted)}
 .notice{background:var(--warn-bg);color:var(--warn);border-radius:10px;padding:12px 14px;margin-bottom:16px}
 .drop{border:2px dashed var(--border);border-radius:12px;padding:18px;text-align:center}
@@ -131,7 +132,8 @@ section{margin-top:16px}
         <table>
           <thead><tr>
             <th data-sort="date">Date</th>
-            <th data-sort="lib">Libellé</th>
+            <th data-sort="libTxt">Libellé</th>
+            <th data-sort="opDate">Date d'achat</th>
             <th data-sort="cat">Catégorie <span class="muted" style="font-weight:400">(clique pour modifier)</span></th>
             <th data-sort="amount" class="amount">Montant</th>
           </tr></thead>

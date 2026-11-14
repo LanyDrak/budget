@@ -84,6 +84,16 @@
     const n = parseFloat(String(v || "").replace(/\s|€/g, "").replace(",", "."));
     return isNaN(n) ? 0 : n;
   }
+  // Libellé lisible : sans numéro de carte, sans date d'achat (affichée à part), en minuscules.
+  function cleanLib(lib) {
+    let t = " " + lib + " ", opDate = "";
+    const take = (iso) => { if (!opDate) opDate = iso; return " "; };
+    t = t.replace(/\s+DU (\d{2})\/(\d{2})\/(\d{2})(\s+\d{1,2}H\d{2})?(?=\s)/i, (m, d, mo, y) => take("20" + y + "-" + mo + "-" + d));
+    t = t.replace(/^\s*PAIEMENT CB DU (\d{2})(\d{2})(\d{2})\s/i, (m, d, mo, y) => take("20" + y + "-" + mo + "-" + d) + "PAIEMENT CB ");
+    t = t.replace(/\s*-?\s*CARTE\s*\*?\s*[0-9X]{4,}\s*$/i, " ");
+    t = t.replace(/\s+-\s+(?=-|$)/g, " ").replace(/\s+/g, " ").trim().replace(/\s*-$/, "").toLowerCase();
+    return { text: t.charAt(0).toUpperCase() + t.slice(1), opDate };
+  }
   const keyOf = (o) => o.date + "|" + o.lib.trim() + "|" + o.amount.toFixed(2);
 
   async function loadData() {
@@ -104,6 +114,7 @@
       ovCat: String(row[8] || "").trim(),
       ovSub: String(row[9] || "").trim()
     })).filter((x) => x.date);
+    ops.forEach((o) => { const c = cleanLib(o.lib); o.libTxt = c.text; o.opDate = c.opDate; });
     ops.forEach(applyRules);
     soldes = s.filter((row) => row[0] !== undefined && row[0] !== "").map((row) => ({ date: serialToISO(row[0]), solde: toNum(row[1]) }))
       .filter((x) => x.date).sort((a, b) => a.date.localeCompare(b.date));
@@ -276,7 +287,7 @@
       && (!state.cat || o.cat === state.cat)
       && (!state.sub || o.sub === state.sub)
       && (!state.type || (state.type === "in" ? o.amount > 0 : o.amount < 0))
-      && (!q || (o.lib + " " + o.cat + " " + o.sub).toLowerCase().includes(q) || Math.abs(o.amount).toFixed(2).includes(q)));
+      && (!q || (o.lib + " " + o.libTxt + " " + o.cat + " " + o.sub).toLowerCase().includes(q) || Math.abs(o.amount).toFixed(2).includes(q)));
     const k = state.sort, d = state.dir;
     rows.sort((a, b) => {
       let r = k === "amount" ? a.amount - b.amount : k === "date" ? a.date.localeCompare(b.date) || a.i - b.i : String(a[k]).localeCompare(String(b[k]), "fr");
@@ -293,12 +304,12 @@
     state.page = Math.min(state.page, pages - 1);
     const slice = rows.slice(state.page * PAGE, state.page * PAGE + PAGE);
     $("tbody").innerHTML = slice.map((o) =>
-      '<tr data-i="' + o.i + '"><td>' + fr(o.date) + '</td><td class="lib">' + esc(o.lib) + '</td><td><button class="catbtn" title="Changer la catégorie">' + esc(o.cat) +
+      '<tr data-i="' + o.i + '"><td>' + fr(o.date) + '</td><td class="lib" title="' + esc(o.lib) + '">' + esc(o.libTxt) + '</td><td class="opdate">' + (o.opDate ? fr(o.opDate) : "") + '</td><td><button class="catbtn" title="Changer la catégorie">' + esc(o.cat) +
       (o.sub ? '<br><span class="tag">' + esc(o.sub) + "</span>" : "") +
       (o.src !== "banque" ? ' <span class="tag src">' + (o.src === "manuel" ? "modifiée" : "règle") + "</span>" : "") +
       '</button></td><td class="amount ' + (o.amount < 0 ? "neg" : "pos") + '">' + money(o.amount) + "</td></tr>" +
       (editing === o.i ? editorRow(o) : "")).join("") ||
-      '<tr><td colspan="4" class="muted">Aucune opération ne correspond.</td></tr>';
+      '<tr><td colspan="5" class="muted">Aucune opération ne correspond.</td></tr>';
     $("pg-info").textContent = "Page " + (state.page + 1) + " / " + pages;
     $("pg-prev").disabled = state.page === 0;
     $("pg-next").disabled = state.page >= pages - 1;
@@ -317,7 +328,7 @@
   function editorRow(o) {
     const cats = [...new Set(ops.map((x) => x.cat).concat(ops.map((x) => x.bankCat)))].sort((a, b) => a.localeCompare(b, "fr"));
     const subs = [...new Set(ops.map((x) => x.sub).concat(ops.map((x) => x.bankSub)).filter(Boolean))].sort((a, b) => a.localeCompare(b, "fr"));
-    return '<tr class="editor"><td colspan="4"><div class="edit-grid">' +
+    return '<tr class="editor"><td colspan="5"><div class="edit-grid">' +
       '<label>Catégorie<input id="e-cat" list="dl-cat" value="' + esc(o.cat) + '"></label>' +
       '<label>Sous-catégorie<input id="e-sub" list="dl-sub" value="' + esc(o.sub) + '"></label>' +
       '<datalist id="dl-cat">' + cats.map((c) => '<option value="' + esc(c) + '">').join("") + "</datalist>" +
@@ -439,7 +450,7 @@
       $("import-summary").textContent = file.name + " : " + parsed.list.length + " opérations du " + span + ". " +
         (fresh.length ? fresh.length + " nouvelle" + (fresh.length > 1 ? "s" : "") + " à ajouter." : "Tout est déjà dans la Sheet.") + gap;
       $("import-preview").innerHTML = fresh.slice(-15).reverse().map((o) =>
-        "<tr><td>" + fr(o.date) + '</td><td class="lib">' + esc(o.lib) + "</td><td>" + esc(o.cat) + '</td><td class="amount ' + (o.amount < 0 ? "neg" : "pos") + '">' + money(o.amount) + "</td></tr>").join("") +
+        "<tr><td>" + fr(o.date) + '</td><td class="lib">' + esc(cleanLib(o.lib).text) + "</td><td>" + esc(o.cat) + '</td><td class="amount ' + (o.amount < 0 ? "neg" : "pos") + '">' + money(o.amount) + "</td></tr>").join("") +
         (fresh.length > 15 ? '<tr><td colspan="4" class="muted">… et ' + (fresh.length - 15) + " autres</td></tr>" : "");
       const soldeNew = parsed.solde && !soldes.some((s) => s.date === parsed.solde.date);
       $("btn-import").disabled = !fresh.length && !soldeNew;
