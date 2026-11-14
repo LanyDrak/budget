@@ -59,6 +59,14 @@ td.lib{min-width:240px}
 .drop.over{border-color:var(--accent)}
 #signin-view{max-width:560px;margin:60px auto;text-align:center}
 .hidden{display:none!important}
+.catbtn{all:unset;cursor:pointer;display:block;border-radius:6px;padding:2px 4px;margin:-2px -4px}
+.catbtn:hover,.catbtn:focus-visible{background:var(--surface2);outline:none}
+.tag.src{background:transparent;border:1px solid var(--border)}
+tr.editor td{background:var(--surface2)}
+.edit-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px;margin-bottom:8px}
+.edit-grid label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted)}
+.rule-line{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:14px}
+.rule-line #e-text{flex:1 1 200px}
 .pager{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:10px}
 section{margin-top:16px}
 @media (max-width:600px){.kpi .value{font-size:20px} td.lib{min-width:180px}}
@@ -124,7 +132,7 @@ section{margin-top:16px}
           <thead><tr>
             <th data-sort="date">Date</th>
             <th data-sort="lib">Libellé</th>
-            <th data-sort="cat">Catégorie</th>
+            <th data-sort="cat">Catégorie <span class="muted" style="font-weight:400">(clique pour modifier)</span></th>
             <th data-sort="amount" class="amount">Montant</th>
           </tr></thead>
           <tbody id="tbody"></tbody>

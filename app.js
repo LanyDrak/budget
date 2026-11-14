@@ -1,6 +1,7 @@
 (function () {
   "use strict";
   const CFG = window.BUDGET_CONFIG;
+  const RULES_TAB = CFG.RULES_TAB || "Règles";
   const SCOPE = "https://www.googleapis.com/auth/spreadsheets";
   const API = "https://sheets.googleapis.com/v4/spreadsheets/" + CFG.SHEET_ID;
   const $ = (id) => document.getElementById(id);
@@ -9,7 +10,7 @@
   const MONTHS_LONG = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
 
   let token = null, tokenClient = null;
-  let ops = [], soldes = [];
+  let ops = [], soldes = [], rules = [];
   const state = { period: "all", q: "", cat: "", sub: "", type: "", sort: "date", dir: -1, page: 0 };
   const PAGE = 50;
   const charts = {};
@@ -87,19 +88,40 @@
 
   async function loadData() {
     const r = encodeURIComponent;
-    const data = await api("/values:batchGet?ranges=" + r(CFG.OPS_TAB + "!A2:H") + "&ranges=" + r(CFG.SOLDES_TAB + "!A2:D") +
+    const data = await api("/values:batchGet?ranges=" + r(CFG.OPS_TAB + "!A2:H") + "&ranges=" + r(CFG.SOLDES_TAB + "!A2:D") + "&ranges=" + r(RULES_TAB + "!A2:C") +
       "&valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=SERIAL_NUMBER");
-    const [o, s] = data.valueRanges.map((v) => v.values || []);
-    ops = o.filter((row) => row[0] !== undefined && row[0] !== "").map((row, i) => ({
+    const [o, s, ru] = data.valueRanges.map((v) => v.values || []);
+    rules = (ru || []).map((row) => ({ text: String(row[0] || "").trim(), cat: String(row[1] || "").trim(), sub: String(row[2] || "").trim() }))
+      .filter((x) => x.text && x.cat);
+    ops = o.map((row, i) => ({
       i,
-      date: serialToISO(row[0]),
-      cat: String(row[1] || "Sans catégorie"),
-      sub: String(row[2] || ""),
+      row: i + 2,
+      date: row[0] === undefined || row[0] === "" ? "" : serialToISO(row[0]),
+      bankCat: String(row[1] || "Sans catégorie"),
+      bankSub: String(row[2] || ""),
       lib: String(row[3] || ""),
-      amount: toNum(row[4])
+      amount: toNum(row[4]),
+      ovCat: String(row[8] || "").trim(),
+      ovSub: String(row[9] || "").trim()
     })).filter((x) => x.date);
+    ops.forEach(applyRules);
     soldes = s.filter((row) => row[0] !== undefined && row[0] !== "").map((row) => ({ date: serialToISO(row[0]), solde: toNum(row[1]) }))
       .filter((x) => x.date).sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  // ---------- Catégories : manuel > règle > banque ----------
+  function ruleFor(lib) {
+    const L = lib.toUpperCase();
+    return rules.find((r) => {
+      const t = r.text.toUpperCase();
+      return t[0] === "^" ? L.startsWith(t.slice(1)) : L.includes(t);
+    });
+  }
+  function applyRules(o) {
+    const r = ruleFor(o.lib);
+    if (o.ovCat) { o.cat = o.ovCat; o.sub = o.ovSub; o.src = "manuel"; }
+    else if (r) { o.cat = r.cat; o.sub = r.sub; o.src = "règle"; o.rule = r.text; }
+    else { o.cat = o.bankCat; o.sub = o.bankSub; o.src = "banque"; }
   }
 
   // ---------- Period ----------
@@ -271,8 +293,11 @@
     state.page = Math.min(state.page, pages - 1);
     const slice = rows.slice(state.page * PAGE, state.page * PAGE + PAGE);
     $("tbody").innerHTML = slice.map((o) =>
-      "<tr><td>" + fr(o.date) + '</td><td class="lib">' + esc(o.lib) + "</td><td>" + esc(o.cat) + (o.sub ? '<br><span class="tag">' + esc(o.sub) + "</span>" : "") +
-      '</td><td class="amount ' + (o.amount < 0 ? "neg" : "pos") + '">' + money(o.amount) + "</td></tr>").join("") ||
+      '<tr data-i="' + o.i + '"><td>' + fr(o.date) + '</td><td class="lib">' + esc(o.lib) + '</td><td><button class="catbtn" title="Changer la catégorie">' + esc(o.cat) +
+      (o.sub ? '<br><span class="tag">' + esc(o.sub) + "</span>" : "") +
+      (o.src !== "banque" ? ' <span class="tag src">' + (o.src === "manuel" ? "modifiée" : "règle") + "</span>" : "") +
+      '</button></td><td class="amount ' + (o.amount < 0 ? "neg" : "pos") + '">' + money(o.amount) + "</td></tr>" +
+      (editing === o.i ? editorRow(o) : "")).join("") ||
       '<tr><td colspan="4" class="muted">Aucune opération ne correspond.</td></tr>';
     $("pg-info").textContent = "Page " + (state.page + 1) + " / " + pages;
     $("pg-prev").disabled = state.page === 0;
@@ -281,6 +306,82 @@
       th.textContent = th.textContent.replace(/ [▲▼]$/, "") + (th.dataset.sort === state.sort ? (state.dir > 0 ? " ▲" : " ▼") : "");
     });
   }
+
+  // ---------- Édition de catégorie ----------
+  let editing = null;
+  function suggestText(lib) {
+    // Propose le début significatif du libellé, sans les dates ni le numéro de carte.
+    return lib.replace(/^(PAIEMENT CB|PRELEVEMENT|VIREMENT( INSTANTANE)?( EMIS| RECU)?( DE| VERS)?|RETRAIT DISTRIBUTEUR)\s+/i, "")
+      .split(/ DU \d{2}\/\d{2}\/\d{2}| - |\s{2,}/)[0].trim().slice(0, 40);
+  }
+  function editorRow(o) {
+    const cats = [...new Set(ops.map((x) => x.cat).concat(ops.map((x) => x.bankCat)))].sort((a, b) => a.localeCompare(b, "fr"));
+    const subs = [...new Set(ops.map((x) => x.sub).concat(ops.map((x) => x.bankSub)).filter(Boolean))].sort((a, b) => a.localeCompare(b, "fr"));
+    return '<tr class="editor"><td colspan="4"><div class="edit-grid">' +
+      '<label>Catégorie<input id="e-cat" list="dl-cat" value="' + esc(o.cat) + '"></label>' +
+      '<label>Sous-catégorie<input id="e-sub" list="dl-sub" value="' + esc(o.sub) + '"></label>' +
+      '<datalist id="dl-cat">' + cats.map((c) => '<option value="' + esc(c) + '">').join("") + "</datalist>" +
+      '<datalist id="dl-sub">' + subs.map((c) => '<option value="' + esc(c) + '">').join("") + "</datalist>" +
+      '</div><label class="rule-line"><input type="checkbox" id="e-rule"> Créer une règle pour tous les libellés contenant ' +
+      '<input id="e-text" value="' + esc(suggestText(o.lib)) + '"></label>' +
+      '<p class="muted" style="margin:6px 0">Origine actuelle : ' + (o.src === "manuel" ? "modifiée à la main" : o.src === "règle" ? "règle « " + esc(o.rule) + " »" : "catégorie BNP") +
+      " (BNP : " + esc(o.bankCat) + (o.bankSub ? " / " + esc(o.bankSub) : "") + ")</p>" +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="primary" id="e-save">Enregistrer</button>' +
+      (o.src === "manuel" ? '<button id="e-reset">Revenir à la catégorie automatique</button>' : "") +
+      '<button id="e-cancel">Annuler</button><span id="e-msg" class="neg"></span></div></td></tr>';
+  }
+  async function saveEdit(o, reset) {
+    const cat = reset ? "" : $("e-cat").value.trim(), sub = reset ? "" : $("e-sub").value.trim();
+    const asRule = !reset && $("e-rule").checked, text = !reset ? $("e-text").value.trim() : "";
+    if (!reset && !cat) { $("e-msg").textContent = "Indique une catégorie."; return; }
+    if (asRule && !text) { $("e-msg").textContent = "Indique le texte de la règle."; return; }
+    document.querySelectorAll(".editor button").forEach((b) => (b.disabled = true));
+    const r = encodeURIComponent;
+    try {
+      if (asRule) {
+        await api("/values/" + r(RULES_TAB + "!A:C") + ":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS", {
+          method: "POST", body: JSON.stringify({ values: [[text, cat, sub]] })
+        });
+        // Une modification manuelle prime sur les règles : on l'efface pour que la nouvelle règle s'applique.
+        if (o.ovCat) await writeOverride(o, "", "");
+      } else {
+        await writeOverride(o, cat, sub);
+      }
+      editing = null;
+      await loadData();
+      render();
+    } catch (e) {
+      if (e.message !== "401") { $("e-msg").textContent = e.message; document.querySelectorAll(".editor button").forEach((b) => (b.disabled = false)); }
+    }
+  }
+  async function writeOverride(o, cat, sub) {
+    const r = encodeURIComponent;
+    // Vérifie que la ligne de la Sheet est toujours la bonne avant d'écrire.
+    const cur = await api("/values/" + r(CFG.OPS_TAB + "!D" + o.row + ":E" + o.row) + "?valueRenderOption=UNFORMATTED_VALUE");
+    const v = (cur.values || [[]])[0];
+    if (String(v[0] || "") !== o.lib || Math.abs(toNum(v[1]) - o.amount) > 0.001) {
+      throw new Error("La Sheet a changé depuis le chargement. Clique sur « Actualiser » puis réessaie.");
+    }
+    await api("/values/" + r(CFG.OPS_TAB + "!I" + o.row + ":J" + o.row) + "?valueInputOption=RAW", {
+      method: "PUT", body: JSON.stringify({ values: [[cat, sub]] })
+    });
+  }
+  $("tbody").addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    if (btn.classList.contains("catbtn")) {
+      const i = Number(btn.closest("tr").dataset.i);
+      editing = editing === i ? null : i;
+      renderTable();
+      if (editing !== null && $("e-cat")) $("e-cat").focus();
+      return;
+    }
+    const o = ops.find((x) => x.i === editing);
+    if (!o) return;
+    if (btn.id === "e-save") saveEdit(o, false);
+    if (btn.id === "e-reset") saveEdit(o, true);
+    if (btn.id === "e-cancel") { editing = null; renderTable(); }
+  });
 
   function setCat(c) { state.cat = c; state.sub = ""; state.page = 0; render(); }
 
